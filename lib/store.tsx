@@ -21,6 +21,7 @@ export {
   type SlotStatus,
   type TeachSkill,
   type LearnSkill,
+  type ActionResult,
 } from "./storeTypes";
 
 export function useStore() {

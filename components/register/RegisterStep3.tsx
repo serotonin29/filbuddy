@@ -33,8 +33,8 @@ export function RegisterStep3({
   const [submitting, setSubmitting] = useState(false);
   const { register } = useStore();
 
-  const bonus = data.teachSkills.length * 50;
-  const total = 100 + bonus;
+  const pendingBonus = data.teachSkills.length * 50;
+  const total = 100;
 
   const submit = async () => {
     setError(null);
@@ -73,11 +73,16 @@ export function RegisterStep3({
           Selamat datang di FilBuddy, <strong className="text-slate-900">{data.fullName || "Buddy"}</strong>!
           Jangan lupa cek email kampus untuk verifikasi akun.
         </p>
-        <div className="inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-amber-50 border border-amber-200 mb-8">
-          <span className="material-symbols-outlined text-amber-500">redeem</span>
-          <span className="font-label-code text-sm font-bold text-amber-700">
+        <div className="inline-flex flex-col items-center gap-1.5 px-5 py-3 rounded-2xl bg-amber-50 border border-amber-200 mb-2">
+          <span className="font-label-code text-sm font-bold text-amber-700 flex items-center gap-2">
+            <span className="material-symbols-outlined text-amber-500">redeem</span>
             +{total} BuddyPoints masuk ke saldo-mu!
           </span>
+          {pendingBonus > 0 && (
+            <span className="text-[11px] text-amber-700/90">
+              +{pendingBonus} Pts bonus skill menunggu — cair setelah kontribusi pertamamu (mis. menjawab di forum).
+            </span>
+          )}
         </div>
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
@@ -227,8 +232,11 @@ export function RegisterStep3({
               <span className="text-slate-300">
                 Skill ditawarkan ({data.teachSkills.length} × 50)
               </span>
-              <span className="font-label-code font-bold text-emerald-400">+{bonus} Pts</span>
+              <span className="font-label-code font-bold text-amber-300">+{pendingBonus} Pts (pending)</span>
             </div>
+            <p className="text-[11px] text-slate-400 leading-snug pt-1">
+              Bonus skill tidak langsung masuk saldo — mencegah klaim semu. Cair otomatis setelah kontribusi pertama yang terverifikasi (menjawab forum, mengajar slot, atau berbagi resource).
+            </p>
             <div className="flex justify-between pt-2 border-t border-white/10">
               <span className="font-semibold">Total saldo awal</span>
               <span key={total} className="font-label-code font-bold text-amber-300 animate-[fade-up_0.35s_ease-out_both]">
@@ -248,13 +256,13 @@ export function RegisterStep3({
           />
           <span className="text-xs text-slate-600 leading-snug">
             Saya menyatakan data di atas benar dan setuju dengan{" "}
-            <a href="#" className="text-indigo-600 font-semibold hover:underline">
+            <Link href="/pedoman" target="_blank" className="text-indigo-600 font-semibold hover:underline">
               Pedoman Komunitas
-            </a>{" "}
+            </Link>{" "}
             &amp;{" "}
-            <a href="#" className="text-indigo-600 font-semibold hover:underline">
+            <Link href="/privasi" target="_blank" className="text-indigo-600 font-semibold hover:underline">
               Privasi Mahasiswa FilBuddy
-            </a>
+            </Link>
             .
           </span>
         </label>

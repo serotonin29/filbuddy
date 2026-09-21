@@ -166,22 +166,24 @@ export function LoginPage() {
                   onClick={() => setMethod("nim")}
                   className={
                     method === "nim"
-                      ? "flex-1 py-2 px-3 rounded-lg bg-white text-indigo-700 shadow-sm border border-slate-200/80 text-center transition-all"
-                      : "flex-1 py-2 px-3 rounded-lg hover:text-slate-900 text-center transition-all text-slate-500 hover:bg-slate-200/60"
+                      ? "flex-1 py-2 px-3 rounded-lg bg-white text-indigo-700 shadow-sm border border-slate-200/80 text-center transition-all whitespace-nowrap"
+                      : "flex-1 py-2 px-3 rounded-lg hover:text-slate-900 text-center transition-all text-slate-500 hover:bg-slate-200/60 whitespace-nowrap"
                   }
                 >
-                  Nomor Induk Mahasiswa (NIM)
+                  <span className="sm:hidden">NIM</span>
+                  <span className="hidden sm:inline">Nomor Induk Mahasiswa (NIM)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setMethod("email")}
                   className={
                     method === "email"
-                      ? "flex-1 py-2 px-3 rounded-lg bg-white text-indigo-700 shadow-sm border border-slate-200/80 text-center transition-all"
-                      : "flex-1 py-2 px-3 rounded-lg hover:text-slate-900 text-center transition-all text-slate-500 hover:bg-slate-200/60"
+                      ? "flex-1 py-2 px-3 rounded-lg bg-white text-indigo-700 shadow-sm border border-slate-200/80 text-center transition-all whitespace-nowrap"
+                      : "flex-1 py-2 px-3 rounded-lg hover:text-slate-900 text-center transition-all text-slate-500 hover:bg-slate-200/60 whitespace-nowrap"
                   }
                 >
-                  Email Kampus (@upiyptk.ac.id)
+                  <span className="sm:hidden">Email Kampus</span>
+                  <span className="hidden sm:inline">Email Kampus (@upiyptk.ac.id)</span>
                 </button>
               </div>
 

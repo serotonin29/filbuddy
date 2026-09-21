@@ -1,7 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useStore } from "@/lib/store";
 import { RegisterStepper } from "./register/RegisterStepper";
 import { RegisterStep1 } from "./register/RegisterStep1";
 import { RegisterStep2 } from "./register/RegisterStep2";
@@ -114,6 +116,15 @@ const leftPanels = {
 export function RegisterPage() {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [data, setData] = useState<RegisterData>(initialRegisterData);
+  const { user, ready } = useStore();
+  const router = useRouter();
+
+  // Sudah login sejak awal? /register tidak relevan — redirect ke dashboard.
+  // Step > 1 berarti registrasi sedang berjalan: user baru muncul dari
+  // pendaftaran sendiri, jadi biarkan success screen tampil.
+  useEffect(() => {
+    if (ready && user && step === 1) router.replace("/dashboard");
+  }, [ready, user, step, router]);
 
   const patch = (p: Partial<RegisterData>) => setData((d) => ({ ...d, ...p }));
   const panel = leftPanels[step];
@@ -141,9 +152,9 @@ export function RegisterPage() {
               <span className="hidden sm:inline">Kembali ke</span> Beranda
             </Link>
             <div className="h-4 w-px bg-slate-200 hidden sm:block" />
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              SSO Portal Aktif
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+              <span className="material-symbols-outlined text-[14px]">schedule</span>
+              SSO Portal — Segera Hadir
             </span>
           </div>
         </div>
@@ -264,9 +275,9 @@ export function RegisterPage() {
             <span>Fakultas Ilmu Komputer UPI YPTK Padang</span>
           </div>
           <div className="flex items-center gap-4 text-[11px]">
-            <a href="#" className="hover:text-indigo-600 transition-colors">Pedoman Komunitas</a>
-            <a href="#" className="hover:text-indigo-600 transition-colors">Bantuan Teknis</a>
-            <a href="#" className="hover:text-indigo-600 transition-colors">Privasi Mahasiswa</a>
+            <Link href="/pedoman" className="hover:text-indigo-600 transition-colors">Pedoman Komunitas</Link>
+            <Link href="/bantuan" className="hover:text-indigo-600 transition-colors">Bantuan Teknis</Link>
+            <Link href="/privasi" className="hover:text-indigo-600 transition-colors">Privasi Mahasiswa</Link>
           </div>
         </div>
       </footer>

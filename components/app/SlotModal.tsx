@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "@/lib/store";
 
 export function SlotModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -11,6 +11,15 @@ export function SlotModal({ open, onClose }: { open: boolean; onClose: () => voi
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [mode, setMode] = useState("Online (Google Meet)");
+  const backdropDown = useRef(false);
+
+  useEffect(() => {
+    if (!open) return;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [open]);
 
   if (!open || !user) return null;
 
@@ -37,11 +46,16 @@ export function SlotModal({ open, onClose }: { open: boolean; onClose: () => voi
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
-      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-start sm:items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
+      onMouseDown={(e) => {
+        backdropDown.current = e.target === e.currentTarget;
+      }}
+      onClick={() => {
+        if (backdropDown.current) onClose();
+      }}
     >
       <div
-        className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 max-h-[90vh] overflow-y-auto animate-[fade-up_0.3s_ease-out_both]"
+        className="w-full max-w-lg bg-white rounded-2xl border border-slate-200 shadow-2xl p-4 sm:p-6 max-h-[85vh] sm:max-h-[90vh] overflow-y-auto animate-[fade-up_0.3s_ease-out_both]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-5">
@@ -127,7 +141,7 @@ export function SlotModal({ open, onClose }: { open: boolean; onClose: () => voi
 
           <div>
             <label className="block text-xs font-bold text-slate-700 uppercase tracking-wide mb-1.5">Mode</label>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
               {["Online (Google Meet)", "Tatap Muka", "Hybrid"].map((m) => (
                 <button
                   key={m}

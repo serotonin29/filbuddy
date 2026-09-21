@@ -51,6 +51,7 @@ type AnswerRow = {
 
 function mapProfile(row: ProfileRow): User {
   return {
+    id: row.id,
     name: row.name,
     nim: row.nim,
     email: row.email,
@@ -317,8 +318,15 @@ function SupabaseStoreInner({
         error: "Akun dibuat! Cek email kampus untuk verifikasi, lalu masuk kembali.",
       };
     }
-    // Session aktif → lengkapi profil (skills, preferensi, bonus poin)
+    // Session aktif → lengkapi profil (skills, preferensi).
+    // Bonus skill TIDAK langsung cair — simpan sebagai pending,
+    // dicairkan setelah kontribusi pertama (anti-fraud poin).
     const bonus = u.teachSkills.length * 50;
+    try {
+      localStorage.setItem("filbuddy-pending-bonus", String(bonus));
+    } catch {
+      /* ignore */
+    }
     await supabase!
       .from("profiles")
       .update({
@@ -326,7 +334,7 @@ function SupabaseStoreInner({
         learn_skills: u.learnSkills,
         study_mode: u.studyMode,
         availability: u.availability,
-        points: 100 + bonus,
+        points: 100,
       })
       .eq("id", data.session.user.id);
     return { ok: true };
@@ -335,6 +343,32 @@ function SupabaseStoreInner({
   const logout = useCallback(async () => {
     await supabase!.auth.signOut();
   }, []);
+
+  // Bonus skill dari registrasi: cair setelah kontribusi pertama.
+  const grantPendingBonus = useCallback(
+    async (reason: string) => {
+      let pending = 0;
+      try {
+        pending = parseInt(localStorage.getItem("filbuddy-pending-bonus") ?? "0", 10) || 0;
+      } catch {
+        return;
+      }
+      if (pending <= 0) return;
+      try {
+        localStorage.removeItem("filbuddy-pending-bonus");
+      } catch {
+        /* ignore */
+      }
+      await adjustPoints(pending);
+      await addActivity(
+        "redeem",
+        "bg-emerald-50 text-emerald-600 border-emerald-200/60",
+        "Bonus skill dicairkan",
+        `+${pending} Pts — ${reason}`
+      );
+    },
+    [adjustPoints, addActivity]
+  );
 
   const createQuestion: Store["createQuestion"] = useCallback(
     async (q) => {
@@ -435,8 +469,9 @@ function SupabaseStoreInner({
         "Jawaban terkirim",
         "di forum tanya jawab"
       );
+      await grantPendingBonus("menjawab pertanyaan di forum");
     },
-    [user, addActivity]
+    [user, addActivity, grantPendingBonus]
   );
 
   const acceptAnswer: Store["acceptAnswer"] = useCallback(
@@ -487,6 +522,77 @@ function SupabaseStoreInner({
       );
     },
     [questions, addActivity]
+  );
+
+  const updateAnswer: Store["updateAnswer"] = useCallback(
+    async (qid, aid, content) => {
+      const uid = uidRef.current;
+      if (!uid || !supabase) return { ok: false, error: "Tidak tersambung." };
+      const trimmed = content.trim();
+      if (trimmed.length < 10) return { ok: false, error: "Jawaban minimal 10 karakter." };
+      const { error } = await supabase!
+        .from("answers")
+        .update({ content: trimmed })
+        .eq("id", aid)
+        .eq("author_id", uid);
+      if (error) return { ok: false, error: "Gagal menyimpan perubahan." };
+      setQuestions((prev) =>
+        prev.map((q) =>
+          q.id === qid
+            ? { ...q, answers: q.answers.map((a) => (a.id === aid ? { ...a, content: trimmed } : a)) }
+            : q
+        )
+      );
+      return { ok: true };
+    },
+    []
+  );
+
+  const deleteAnswer: Store["deleteAnswer"] = useCallback(
+    async (qid, aid) => {
+      const uid = uidRef.current;
+      if (!uid || !supabase) return { ok: false, error: "Tidak tersambung." };
+      const q = questions.find((x) => x.id === qid);
+      const a = q?.answers.find((x) => x.id === aid);
+      if (!q || !a) return { ok: false, error: "Jawaban tidak ditemukan." };
+      if (a.authorId !== uid) return { ok: false, error: "Bukan jawabanmu." };
+      if (a.accepted) {
+        return { ok: false, error: "Jawaban terbaik tidak bisa dihapus — minta penanya menandai jawaban lain dulu." };
+      }
+      const { error } = await supabase!.from("answers").delete().eq("id", aid).eq("author_id", uid);
+      if (error) return { ok: false, error: "Gagal menghapus jawaban." };
+      setQuestions((prev) =>
+        prev.map((x) => (x.id === qid ? { ...x, answers: x.answers.filter((y) => y.id !== aid) } : x))
+      );
+      return { ok: true };
+    },
+    [questions]
+  );
+
+  const deleteQuestion: Store["deleteQuestion"] = useCallback(
+    async (qid) => {
+      const uid = uidRef.current;
+      if (!uid || !supabase) return { ok: false, error: "Tidak tersambung." };
+      const q = questions.find((x) => x.id === qid);
+      if (!q) return { ok: false, error: "Pertanyaan tidak ditemukan." };
+      if (!q.mine) return { ok: false, error: "Bukan pertanyaanmu." };
+      if (q.status === "terjawab") {
+        return { ok: false, error: "Pertanyaan sudah terjawab — diskusi ini bermanfaat, biarkan tetap ada." };
+      }
+      const { error } = await supabase!.from("questions").delete().eq("id", qid).eq("author_id", uid);
+      if (error) return { ok: false, error: "Gagal menghapus pertanyaan." };
+      // Reward yang masih tertahan dikembalikan ke saldo.
+      if (q.reward && q.reward > 0) await adjustPoints(q.reward);
+      setQuestions((prev) => prev.filter((x) => x.id !== qid));
+      await addActivity(
+        "delete",
+        "bg-slate-50 text-slate-500 border-slate-200",
+        "Pertanyaan dihapus",
+        q.reward ? `reward ${q.reward} Pts dikembalikan` : "oleh kamu"
+      );
+      return { ok: true };
+    },
+    [questions, adjustPoints, addActivity]
   );
 
   const createSlot: Store["createSlot"] = useCallback(
@@ -616,6 +722,9 @@ function SupabaseStoreInner({
       voteQuestion,
       addAnswer,
       acceptAnswer,
+      updateAnswer,
+      deleteAnswer,
+      deleteQuestion,
       createSlot,
       cancelSlot,
       requestBarter,
@@ -635,6 +744,9 @@ function SupabaseStoreInner({
       voteQuestion,
       addAnswer,
       acceptAnswer,
+      updateAnswer,
+      deleteAnswer,
+      deleteQuestion,
       createSlot,
       cancelSlot,
       requestBarter,

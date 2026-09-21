@@ -33,6 +33,13 @@ main > :last-child {
 
 .material-symbols-outlined {
   font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  /* Kunci ukuran 1em supaya ligature mentah (sebelum font termuat) tidak
+     menggelembungkan layout dan memicu horizontal overflow */
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .scrollbar-none {
@@ -41,6 +48,15 @@ main > :last-child {
 
 .scrollbar-none::-webkit-scrollbar {
   display: none;
+}
+
+/* Cegah iOS Safari auto-zoom saat input difokuskan (butuh >= 16px) */
+@media (max-width: 639px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
 }
 
 /* Auth mesh gradient background */

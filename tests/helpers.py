@@ -53,6 +53,57 @@ def make_account():
     }
 
 
+def rest_login(email: str, password: str) -> str:
+    """Login via REST Supabase, return access_token."""
+    body = json.dumps({"email": email, "password": password}).encode()
+    req = urllib.request.Request(
+        f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+        data=body,
+        headers={"apikey": ANON_KEY, "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as r:
+        return json.load(r)["access_token"]
+
+
+def cleanup_account(email: str, password: str) -> None:
+    """Hapus seluruh data milik akun E2E dari Supabase.
+
+    Butuh policy delete-own (supabase/policies_and_cleanup.sql).
+    question_votes, answers, slots & activities terhapus lewat
+    cascade saat questions/profiles dihapus; dihapus eksplisit
+    agar tetap bersih walau cascade belum terpasang.
+    """
+    if not supabase_ready():
+        return
+    try:
+        token = rest_login(email, password)
+    except Exception:
+        print(f"  cleanup: skip ({email} gagal login)")
+        return
+    hdr = {"apikey": ANON_KEY, "Authorization": f"Bearer {token}"}
+    req = urllib.request.Request(f"{SUPABASE_URL}/auth/v1/user", headers=hdr)
+    uid = json.load(urllib.request.urlopen(req))["id"]
+    for table, col in [
+        ("question_votes", "user_id"),
+        ("answers", "author_id"),
+        ("questions", "author_id"),
+        ("slots", "owner_id"),
+        ("activities", "user_id"),
+        ("profiles", "id"),
+    ]:
+        req = urllib.request.Request(
+            f"{SUPABASE_URL}/rest/v1/{table}?{col}=eq.{uid}",
+            headers={**hdr, "Prefer": "return=minimal"},
+            method="DELETE",
+        )
+        try:
+            urllib.request.urlopen(req)
+        except Exception as e:
+            print(f"  cleanup: gagal hapus {table} ({e})")
+    print(f"  cleanup: data akun {email} dihapus")
+
+
 def login(page, account):
     """Login via UI dengan akun yang sesuai mode."""
     page.goto(f"{BASE}/login")

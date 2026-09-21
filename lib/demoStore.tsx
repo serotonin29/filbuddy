@@ -327,9 +327,15 @@ export function DemoStoreProvider({
         (x) => x.nim === u.nim || x.email.toLowerCase() === u.email.toLowerCase()
       );
       if (exists) return { ok: false, error: "NIM atau email sudah terdaftar." };
+      // Bonus skill pending — cair setelah kontribusi pertama.
+      try {
+        localStorage.setItem("filbuddy-pending-bonus", String(u.teachSkills.length * 50));
+      } catch {
+        /* ignore */
+      }
       const newUser: User = {
         ...u,
-        points: 100 + u.teachSkills.length * 50,
+        points: 100,
         teachingHours: 0,
         sessionsDone: 0,
         rating: 5.0,
@@ -388,7 +394,7 @@ export function DemoStoreProvider({
       }
       return { ok: true };
     },
-    [state.users, addActivity]
+    [state.users, state.currentNim, addActivity]
   );
 
   const voteQuestion: Store["voteQuestion"] = useCallback((id, dir) => {
@@ -410,9 +416,20 @@ export function DemoStoreProvider({
     setState((s) => {
       const me = s.users.find((u) => u.nim === s.currentNim);
       if (!me) return s;
+      // Bonus skill pending cair pada kontribusi pertama
+      let pending = 0;
+      try {
+        pending = parseInt(localStorage.getItem("filbuddy-pending-bonus") ?? "0", 10) || 0;
+      } catch {
+        pending = 0;
+      }
       return {
         ...s,
         nextId: s.nextId + 1,
+        users:
+          pending > 0
+            ? s.users.map((u) => (u.nim === s.currentNim ? { ...u, points: u.points + pending } : u))
+            : s.users,
         questions: s.questions.map((q) =>
           q.id === qid
             ? {
@@ -434,6 +451,19 @@ export function DemoStoreProvider({
         ),
       };
     });
+    try {
+      if (parseInt(localStorage.getItem("filbuddy-pending-bonus") ?? "0", 10) > 0) {
+        localStorage.removeItem("filbuddy-pending-bonus");
+        addActivity({
+          icon: "redeem",
+          iconClass: "bg-emerald-50 text-emerald-600 border-emerald-200/60",
+          title: "Bonus skill dicairkan",
+          desc: "kontribusi pertama di forum",
+        });
+      }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const acceptAnswer: Store["acceptAnswer"] = useCallback(
@@ -468,6 +498,96 @@ export function DemoStoreProvider({
         title: "Jawaban diterima",
         desc: "Reward poin ditransfer ke penjawab",
       });
+    },
+    [addActivity]
+  );
+
+  const updateAnswer: Store["updateAnswer"] = useCallback(
+    (qid, aid, content) => {
+      const trimmed = content.trim();
+      if (trimmed.length < 10) return { ok: false, error: "Jawaban minimal 10 karakter." };
+      setState((s) => ({
+        ...s,
+        questions: s.questions.map((q) =>
+          q.id === qid
+            ? { ...q, answers: q.answers.map((a) => (a.id === aid ? { ...a, content: trimmed } : a)) }
+            : q
+        ),
+      }));
+      return { ok: true };
+    },
+    []
+  );
+
+  const deleteAnswer: Store["deleteAnswer"] = useCallback(
+    (qid, aid) => {
+      let error: string | undefined;
+      setState((s) => {
+        const me = s.users.find((u) => u.nim === s.currentNim);
+        const q = s.questions.find((x) => x.id === qid);
+        const a = q?.answers.find((x) => x.id === aid);
+        if (!me || !q || !a) {
+          error = "Jawaban tidak ditemukan.";
+          return s;
+        }
+        if (a.author !== me.name) {
+          error = "Bukan jawabanmu.";
+          return s;
+        }
+        if (a.accepted) {
+          error = "Jawaban terbaik tidak bisa dihapus — minta penanya menandai jawaban lain dulu.";
+          return s;
+        }
+        return {
+          ...s,
+          questions: s.questions.map((x) =>
+            x.id === qid ? { ...x, answers: x.answers.filter((y) => y.id !== aid) } : x
+          ),
+        };
+      });
+      return error ? { ok: false, error } : { ok: true };
+    },
+    []
+  );
+
+  const deleteQuestion: Store["deleteQuestion"] = useCallback(
+    (qid) => {
+      let error: string | undefined;
+      setState((s) => {
+        const me = s.users.find((u) => u.nim === s.currentNim);
+        const q = s.questions.find((x) => x.id === qid);
+        if (!me || !q) {
+          error = "Pertanyaan tidak ditemukan.";
+          return s;
+        }
+        if (!q.mine) {
+          error = "Bukan pertanyaanmu.";
+          return s;
+        }
+        if (q.status === "terjawab") {
+          error = "Pertanyaan sudah terjawab — diskusi ini bermanfaat, biarkan tetap ada.";
+          return s;
+        }
+        return {
+          ...s,
+          // Reward yang masih tertahan dikembalikan ke saldo.
+          users:
+            q.reward && q.reward > 0
+              ? s.users.map((u) =>
+                  u.nim === s.currentNim ? { ...u, points: u.points + q.reward! } : u
+                )
+              : s.users,
+          questions: s.questions.filter((x) => x.id !== qid),
+        };
+      });
+      if (error) return { ok: false, error };
+      addActivity({
+        icon: "delete",
+        iconClass: "bg-slate-50 text-slate-500 border-slate-200",
+        title: "Pertanyaan dihapus",
+        desc: "oleh kamu",
+      });
+      return { ok: true };
     },
     [addActivity]
   );
@@ -572,6 +692,9 @@ export function DemoStoreProvider({
     voteQuestion,
     addAnswer,
     acceptAnswer,
+    updateAnswer,
+    deleteAnswer,
+    deleteQuestion,
     createSlot,
     cancelSlot,
     requestBarter,

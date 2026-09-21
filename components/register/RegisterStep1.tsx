@@ -30,10 +30,13 @@ export function RegisterStep1({
   const [confirm, setConfirm] = useState("");
   const strength = usePasswordStrength(data.password);
 
+  const nimOk = /^\d{10,14}$/.test(data.nim.trim());
+  const emailOk = /^[^\s@]+@upiyptk\.ac\.id$/i.test(data.email.trim());
+
   const valid =
     data.fullName.trim() !== "" &&
-    data.nim.trim() !== "" &&
-    data.email.trim() !== "" &&
+    nimOk &&
+    emailOk &&
     data.prodi !== "" &&
     data.password.length >= 8 &&
     confirm === data.password;
@@ -69,6 +72,7 @@ export function RegisterStep1({
                 type="text"
                 id="fullName"
                 required
+                autoComplete="name"
                 value={data.fullName}
                 onChange={(e) => onChange({ fullName: e.target.value })}
                 placeholder="cth. Sarah Azzahra Putri"
@@ -88,9 +92,13 @@ export function RegisterStep1({
                 type="text"
                 id="nim"
                 required
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={14}
                 value={data.nim}
-                onChange={(e) => onChange({ nim: e.target.value })}
+                onChange={(e) => onChange({ nim: e.target.value.replace(/\D/g, "").slice(0, 14) })}
                 placeholder="22101152610xxx"
+                aria-invalid={data.nim !== "" && !nimOk}
                 className={`${inputClass} pl-10 pr-20 py-2.5 font-label-code tracking-wide`}
               />
               <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
@@ -99,6 +107,9 @@ export function RegisterStep1({
                 </span>
               </div>
             </div>
+            {data.nim !== "" && !nimOk && (
+              <p className="text-[11px] text-rose-600 mt-1">NIM harus 10–14 digit angka.</p>
+            )}
           </div>
         </div>
 
@@ -114,16 +125,25 @@ export function RegisterStep1({
               type="email"
               id="email"
               required
+              autoComplete="email"
               value={data.email}
               onChange={(e) => onChange({ email: e.target.value })}
               placeholder="nama@upiyptk.ac.id"
+              aria-invalid={data.email !== "" && !emailOk}
               className={`${inputClass} pl-10 pr-4 py-2.5`}
             />
           </div>
-          <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
-            <span className="material-symbols-outlined text-[14px] text-slate-400">info</span>
-            Gunakan email aktif universitas untuk verifikasi status mahasiswa.
-          </p>
+          {data.email !== "" && !emailOk ? (
+            <p className="text-[11px] text-rose-600 mt-1 flex items-center gap-1">
+              <span className="material-symbols-outlined text-[14px]">error</span>
+              Email harus menggunakan domain kampus @upiyptk.ac.id.
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1">
+              <span className="material-symbols-outlined text-[14px] text-slate-400">info</span>
+              Gunakan email aktif universitas untuk verifikasi status mahasiswa.
+            </p>
+          )}
         </div>
 
         <div>
@@ -170,6 +190,7 @@ export function RegisterStep1({
                 id="password"
                 required
                 minLength={8}
+                autoComplete="new-password"
                 value={data.password}
                 onChange={(e) => onChange({ password: e.target.value })}
                 placeholder="••••••••"
@@ -200,6 +221,7 @@ export function RegisterStep1({
                 id="passwordConfirm"
                 required
                 minLength={8}
+                autoComplete="new-password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
                 placeholder="••••••••"

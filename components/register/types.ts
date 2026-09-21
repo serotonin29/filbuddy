@@ -31,16 +31,10 @@ export const initialRegisterData: RegisterData = {
   email: "",
   prodi: "",
   password: "",
-  teachSkills: [
-    { name: "Web Development (HTML/CSS, React)", icon: "code", level: "Menengah" },
-    { name: "Desain UI/UX (Figma)", icon: "palette", level: "Mahir" },
-  ],
-  learnSkills: [
-    { name: "Kalkulus Informatika", icon: "calculate" },
-    { name: "Struktur Data & Algoritma", icon: "account_tree" },
-  ],
+  teachSkills: [],
+  learnSkills: [],
   studyMode: "hybrid",
-  availability: ["Senin - Jumat Sore", "Akhir Pekan (Sabtu/Minggu)"],
+  availability: [],
 };
 
 export const LEVELS: SkillLevel[] = ["Pemula", "Menengah", "Mahir"];

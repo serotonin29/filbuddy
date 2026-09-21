@@ -49,3 +49,7 @@ next-env.d.ts
 /.venv
 /.claude
 *.stitch-*.html
+
+# python
+__pycache__/
+*.pyc

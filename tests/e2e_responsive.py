@@ -50,11 +50,16 @@ with sync_playwright() as p:
         if not logo_ok:
             failures.append(f"{label}: logo tidak terlihat")
 
-        # leaderboard menampilkan peringkat user
+        # leaderboard menampilkan banner peringkat (badge "Kamu" hanya
+        # kalau akun sudah berkontribusi; fresh akun → empty state jujur)
         page.goto(f"{BASE}/dashboard/leaderboard")
         page.wait_for_load_state("networkidle")
-        lb_ok = page.locator("text=Peringkatmu").count() > 0 and page.locator("text=Kamu").count() > 0
-        print(f"  {'✓' if lb_ok else '✗'} leaderboard sinkron (peringkat & badge Kamu)")
+        lb_ok = page.locator("text=Peringkatmu").count() > 0 and (
+            page.locator("text=Kamu").count() > 0
+            or page.locator("text=Belum berkontribusi").count() > 0
+            or page.locator("text=Belum ada kontribusi").count() > 0
+        )
+        print(f"  {'✓' if lb_ok else '✗'} leaderboard sinkron (banner peringkat / empty-state)")
         if not lb_ok:
             failures.append(f"{label}: leaderboard tidak sinkron")
 

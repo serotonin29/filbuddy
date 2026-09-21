@@ -1,7 +1,7 @@
 """FilBuddy E2E smoke test — otomatis menyesuaikan mode (demo / supabase)."""
 
 from playwright.sync_api import sync_playwright
-from helpers import BASE, make_account, login
+from helpers import BASE, make_account, login, cleanup_account
 
 PASS = []
 FAIL = []
@@ -131,6 +131,8 @@ with sync_playwright() as p:
 
 print(f"\n{'='*50}")
 print(f"HASIL: {len(PASS)} lulus, {len(FAIL)} gagal")
+if account["mode"] == "supabase":
+    cleanup_account(account["email"], account["password"])
 if FAIL:
     print("GAGAL di:")
     for f in FAIL:

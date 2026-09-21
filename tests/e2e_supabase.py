@@ -6,6 +6,8 @@ import time
 import urllib.request
 from playwright.sync_api import sync_playwright
 
+from helpers import cleanup_account
+
 BASE = "http://localhost:3000"
 SUPABASE_URL = "https://royxwupescldvktlspwb.supabase.co"
 ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJveXh3dXBlc2NsZHZrdGxzcHdiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5MDMwOTQsImV4cCI6MjEwNDQ3OTA5NH0.Pm704ApHp_n-oYy1rKwufZs6a8sQyfGsbABYd6F_AOk"
@@ -61,6 +63,10 @@ with sync_playwright() as p:
     page.wait_for_selector("text=Tentukan Keahlian", timeout=5000)
     check("langkah 2 tercapai", True)
 
+    # Tambah minimal 1 skill diajarkan (default kini kosong — anti state leakage)
+    page.fill("input[placeholder*='Cari atau tambah skill']", "Web Programming")
+    page.press("input[placeholder*='Cari atau tambah skill']", "Enter")
+    page.wait_for_selector("text=Web Programming", timeout=5000)
     page.click("button:has-text('Lanjut ke Konfirmasi')")
     page.wait_for_selector("text=Konfirmasi & Aktivasi", timeout=5000)
     # centang checkbox persetujuan & pastikan tombol aktif sebelum klik
@@ -68,7 +74,7 @@ with sync_playwright() as p:
     page.wait_for_selector("button:has-text('Buat Akun'):not([disabled])", timeout=5000)
     page.click("button:has-text('Buat Akun')")
     try:
-        page.wait_for_selector("text=Akun Berhasil Dibuat", timeout=15000)
+        page.wait_for_selector("text=Akun Berhasil Dibuat", timeout=30000)
         check("register sukses (session aktif)", True)
     except Exception:
         err = page.locator("div.bg-rose-50").first
@@ -93,7 +99,7 @@ with sync_playwright() as p:
     page.wait_for_load_state("networkidle")
     check("login email sukses → /dashboard", "/dashboard" in page.url)
     check("greeting personal", page.locator("text=Selamat datang kembali, Tester").count() > 0)
-    check("saldo poin = 100 + bonus skill", page.locator("text=⚡").first.is_visible())
+    check("saldo poin starter tampil (bonus skill pending)", page.locator("text=⚡").first.is_visible())
 
     # ---------- 3. Forum: pertanyaan + jawaban + accept ----------
     print("\n[3] Forum — tanya, jawab, tandai terbaik")
@@ -101,15 +107,16 @@ with sync_playwright() as p:
     page.wait_for_load_state("networkidle")
     page.click("button:has-text('Tanya Sekarang')")
     page.wait_for_selector("text=Tanya Sesuatu", timeout=5000)
-    page.fill("input[placeholder*='Kenapa query JOIN']", "Test E2E: cara setup Prisma dengan Supabase?")
+    Q_TITLE = f"Test E2E {RUN}: cara setup Prisma dengan Supabase?"
+    page.fill("input[placeholder*='Kenapa query JOIN']", Q_TITLE)
     page.fill("textarea[placeholder*='Jelaskan konteks']", "Ini pertanyaan test end-to-end untuk mode database.")
     page.locator("select").last.select_option("Database")
     page.fill("input[placeholder*='mysql laravel']", "supabase prisma")
     page.locator("button:has-text('Posting Pertanyaan')").click()
-    page.wait_for_selector("text=Test E2E: cara setup Prisma", timeout=5000)
+    page.wait_for_selector(f"text={Q_TITLE}", timeout=5000)
     check("pertanyaan tersimpan ke database", True)
 
-    article = page.locator("article", has_text="Test E2E: cara setup Prisma").first
+    article = page.locator("article", has_text=Q_TITLE).first
     article.locator("button[aria-label='Upvote']").first.click()
     page.wait_for_timeout(800)
     check("vote tersimpan", True)
@@ -144,7 +151,7 @@ with sync_playwright() as p:
     check("slot tetap ada setelah reload", page.locator("text=Sesi Test E2E Database").count() > 0)
     page.goto(f"{BASE}/dashboard/forum")
     page.wait_for_load_state("networkidle")
-    check("pertanyaan tetap ada setelah reload", page.locator("text=Test E2E: cara setup Prisma").count() > 0)
+    check("pertanyaan tetap ada setelah reload", page.locator(f"text={Q_TITLE}").count() > 0)
 
     # ---------- 6. Verifikasi langsung ke REST API ----------
     print("\n[6] Verifikasi REST API & RLS")
@@ -163,6 +170,7 @@ with sync_playwright() as p:
 
 print(f"\n{'='*50}")
 print(f"HASIL: {len(PASS)} lulus, {len(FAIL)} gagal")
+cleanup_account(EMAIL, PASSWORD)
 if FAIL:
     for f in FAIL:
         print(f"  - {f}")

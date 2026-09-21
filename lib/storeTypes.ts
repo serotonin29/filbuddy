@@ -5,6 +5,8 @@ export type { LearnSkill, TeachSkill };
 export type StudyMode = "online" | "offline" | "hybrid";
 
 export type User = {
+  /** auth uid — hanya terisi di mode database */
+  id?: string;
   name: string;
   nim: string;
   email: string;
@@ -112,6 +114,12 @@ export type Store = {
   voteQuestion: (id: number, dir: 1 | -1) => void | Promise<void>;
   addAnswer: (qid: number, content: string) => void | Promise<void>;
   acceptAnswer: (qid: number, aid: number) => void | Promise<void>;
+  /** Edit isi jawaban milik sendiri */
+  updateAnswer: (qid: number, aid: number, content: string) => MaybeAsync<ActionResult>;
+  /** Hapus jawaban milik sendiri (ditolak bila sudah jadi jawaban terbaik) */
+  deleteAnswer: (qid: number, aid: number) => MaybeAsync<ActionResult>;
+  /** Hapus pertanyaan milik sendiri; reward dikembalikan bila belum terjawab */
+  deleteQuestion: (qid: number) => MaybeAsync<ActionResult>;
   createSlot: (s: { title: string; schedule: string; partner: string; mode: string }) => void | Promise<void>;
   cancelSlot: (id: number) => void | Promise<void>;
   requestBarter: (name: string, teach: string, need: string) => void | Promise<void>;
