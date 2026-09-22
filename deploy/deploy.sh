@@ -36,6 +36,11 @@ if [ "${1:-}" = "setup" ]; then
   rm -f /etc/nginx/sites-enabled/default
   nginx -t
   systemctl reload nginx
+
+  # Log & folder app harus dimiliki user biasa (bukan root),
+  # karena PM2 dijalankan sebagai user tersebut.
+  local RUN_USER="${SUDO_USER:-$USER}"
+  chown -R "$RUN_USER":"$RUN_USER" /var/log/filbuddy "$APP_DIR"
 fi
 
 if [ ! -f ".env.local" ]; then
