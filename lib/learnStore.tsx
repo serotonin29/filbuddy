@@ -10,8 +10,18 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "./supabase/client";
 import { useStore } from "./store";
-import { parseDriveId, driveApiKey, walkDriveFolder, type DriveCourseTree, DEMO_SAMPLE_VIDEO } from "./drive";
-import type { LearnActionResult, LearnCourse, LearnLesson } from "./learnTypes";
+import {
+  parseDriveId,
+  driveApiKey,
+  walkDriveFolder,
+  fetchSubtitleText,
+  parseSubtitleCues,
+  buildVtt,
+  type DriveCourseTree,
+  DEMO_SAMPLE_VIDEO,
+} from "./drive";
+import { translateCues, aiReady } from "./ai";
+import type { LearnActionResult, LearnCourse, LearnLesson, LearnMaterial } from "./learnTypes";
 
 const LS_KEY = "filbuddy-learn-demo-v1";
 const CACHE_KEY = "filbuddy-learn-cache-v1";
@@ -19,6 +29,8 @@ const CACHE_KEY = "filbuddy-learn-cache-v1";
 type LearnState = {
   courses: LearnCourse[];
   lessons: LearnLesson[];
+  /** Materi PDF per kursus */
+  materials: LearnMaterial[];
   /** lessonId → ISO waktu selesai */
   done: Record<string, string>;
   /** courseId → jumlah video (grid render instan tanpa menunggu daftar video) */
@@ -36,11 +48,20 @@ type LearnContextValue = LearnState & {
   deleteCourse: (courseId: string) => Promise<LearnActionResult>;
   toggleDone: (lessonId: string) => Promise<void>;
   /**
-   * Import isi folder Google Drive (subfolder → kursus, video → pelajaran,
-   * subtitle .srt/.vtt dipasangkan otomatis per nama file). Import ulang
-   * folder yang sama menggantikan hasil import sebelumnya.
+   * Import isi folder Google Drive — folder utama jadi kursus, subfolder
+   * jadi section, video jadi pelajaran, PDF jadi materi, subtitle
+   * .srt/.vtt dipasangkan otomatis. Import ulang folder yang sama
+   * menggantikan hasil import sebelumnya.
    */
-  syncFolder: (folderId: string) => Promise<LearnActionResult & { courses?: number; lessons?: number }>;
+  syncFolder: (folderId: string) => Promise<LearnActionResult & { courses?: number; lessons?: number; materials?: number }>;
+  /**
+   * Terjemahkan subtitle pelajaran ke Bahasa Indonesia via AI lalu simpan
+   * (hanya penulis kursus). onProgress(done, total) = progres batch.
+   */
+  translateSubtitle: (
+    lessonId: string,
+    onProgress?: (done: number, total: number) => void
+  ) => Promise<LearnActionResult>;
 };
 
 const LearnContext = createContext<LearnContextValue | null>(null);
@@ -86,6 +107,7 @@ function demoSeed(): LearnState {
     ],
     done: {},
     counts: {},
+    materials: [],
   };
 }
 
@@ -95,7 +117,7 @@ function loadDemoState(): LearnState {
     if (raw) {
       const parsed = JSON.parse(raw) as LearnState;
       if (Array.isArray(parsed.courses) && Array.isArray(parsed.lessons)) {
-        return { courses: parsed.courses, lessons: parsed.lessons, done: parsed.done ?? {}, counts: {} };
+        return { courses: parsed.courses, lessons: parsed.lessons, done: parsed.done ?? {}, counts: {}, materials: [] };
       }
     }
   } catch {
@@ -168,7 +190,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
 
   /** true kalau tabel learn_* belum ada di Supabase → fallback lokal */
   const [dbMissing, setDbMissing] = useState(false);
-  const [state, setState] = useState<LearnState>({ courses: [], lessons: [], done: {}, counts: {} });
+  const [state, setState] = useState<LearnState>({ courses: [], lessons: [], done: {}, counts: {}, materials: [] });
   const [ready, setReady] = useState(false);
   const loadedKeyRef = useRef<string | null>(null);
 
@@ -198,7 +220,13 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         if (raw) {
           const c = JSON.parse(raw) as LearnState;
           if (Array.isArray(c.courses) && Array.isArray(c.lessons)) {
-            setState({ courses: c.courses, lessons: c.lessons, done: c.done ?? {}, counts: c.counts ?? {} });
+            setState({
+              courses: c.courses,
+              lessons: c.lessons,
+              done: c.done ?? {},
+              counts: c.counts ?? {},
+              materials: Array.isArray(c.materials) ? c.materials : [],
+            });
             setReady(true);
           }
         }
@@ -247,9 +275,10 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       setState((s) => ({ ...s, courses }));
       setReady(true);
 
-      // 3) Query berat di belakang: daftar video lengkap + progres pribadi
-      const [lRes, pRes] = await Promise.all([
+      // 3) Query berat di belakang: daftar video lengkap + materi PDF + progres pribadi
+      const [lRes, mRes, pRes] = await Promise.all([
         supabase!.from("learn_lessons").select("*").order("position"),
+        supabase!.from("learn_materials").select("*").order("position"),
         supabase!.from("learn_progress").select("lesson_id, completed_at").eq("user_id", user!.id!),
       ]);
       if (cancelled) return;
@@ -257,6 +286,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         id: string; course_id: string; title: string; position: number;
         drive_file_id: string | null; video_url: string | null;
         subtitle_drive_file_id: string | null; subtitle_url: string | null;
+        subtitle_translated: string | null; section: string | null;
       }>).map((r) => ({
         id: r.id,
         courseId: r.course_id,
@@ -266,12 +296,25 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         videoUrl: r.video_url ?? undefined,
         subtitleDriveFileId: r.subtitle_drive_file_id ?? undefined,
         subtitleUrl: r.subtitle_url ?? undefined,
+        subtitleTranslated: r.subtitle_translated ?? undefined,
+        section: r.section ?? undefined,
+      }));
+      const materials: LearnMaterial[] = ((mRes.data ?? []) as Array<{
+        id: string; course_id: string; title: string; drive_file_id: string;
+        section: string | null; position: number;
+      }>).map((r) => ({
+        id: r.id,
+        courseId: r.course_id,
+        title: r.title,
+        driveFileId: r.drive_file_id,
+        section: r.section ?? undefined,
+        position: r.position,
       }));
       const done: Record<string, string> = {};
       for (const p of (pRes.data ?? []) as Array<{ lesson_id: string; completed_at: string }>) {
         done[p.lesson_id] = p.completed_at;
       }
-      setState((s) => ({ ...s, lessons, done }));
+      setState((s) => ({ ...s, lessons, materials, done }));
     })();
 
     return () => {
@@ -349,6 +392,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       persistDemo({
         courses: state.courses.filter((c) => c.id !== courseId),
         lessons: state.lessons.filter((l) => l.courseId !== courseId),
+        materials: state.materials.filter((m) => m.courseId !== courseId),
         done: Object.fromEntries(Object.entries(state.done).filter(([lid]) => !state.lessons.some((l) => l.id === lid && l.courseId === courseId))),
         counts: Object.fromEntries(Object.entries(state.counts).filter(([cid]) => cid !== courseId)),
       });
@@ -413,6 +457,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       persistDemo({
         courses: state.courses,
         lessons: state.lessons.filter((l) => l.id !== lessonId),
+        materials: state.materials,
         done: Object.fromEntries(Object.entries(state.done).filter(([lid]) => lid !== lessonId)),
         counts: { ...state.counts, [courseId]: Math.max(0, (state.counts[courseId] ?? 1) - 1) },
       });
@@ -456,6 +501,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         return { ok: false, error: (e as Error).message };
       }
       const totalLessons = tree.reduce((n, c) => n + c.videos.length, 0);
+      const totalMaterials = tree.reduce((n, c) => n + c.materials.length, 0);
       if (tree.length === 0 || totalLessons === 0) {
         return { ok: false, error: "Tidak ada file video ditemukan di folder itu." };
       }
@@ -499,7 +545,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         }));
 
         const lessonInserts: Array<{
-          course_id: string; title: string; drive_file_id: string; subtitle_drive_file_id: string | null; position: number;
+          course_id: string; title: string; drive_file_id: string; subtitle_drive_file_id: string | null; section: string | null; position: number;
         }> = [];
         rows.forEach((r, i) => {
           tree[i].videos.forEach((v, j) => {
@@ -508,6 +554,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
               title: v.title,
               drive_file_id: v.videoId,
               subtitle_drive_file_id: v.subtitleId ?? null,
+              section: v.section ?? null,
               position: j + 1,
             });
           });
@@ -517,11 +564,11 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
           const { data: li, error: lerr } = await supabase
             .from("learn_lessons")
             .insert(lessonInserts)
-            .select("id, course_id, title, position, drive_file_id, subtitle_drive_file_id");
+            .select("id, course_id, title, position, drive_file_id, subtitle_drive_file_id, section");
           if (lerr) return { ok: false, error: "Kursus dibuat, tapi gagal menambah video: " + lerr.message };
           lessonRowsOut = ((li ?? []) as Array<{
             id: string; course_id: string; title: string; position: number;
-            drive_file_id: string | null; subtitle_drive_file_id: string | null;
+            drive_file_id: string | null; subtitle_drive_file_id: string | null; section: string | null;
           }>).map((r) => ({
             id: r.id,
             courseId: r.course_id,
@@ -529,7 +576,46 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
             position: r.position,
             driveFileId: r.drive_file_id ?? undefined,
             subtitleDriveFileId: r.subtitle_drive_file_id ?? undefined,
+            section: r.section ?? undefined,
           }));
+        }
+
+        const materialInserts: Array<{
+          course_id: string; title: string; drive_file_id: string; section: string | null; position: number;
+        }> = [];
+        rows.forEach((r, i) => {
+          tree[i].materials.forEach((m, j) => {
+            materialInserts.push({
+              course_id: r.id,
+              title: m.title,
+              drive_file_id: m.fileId,
+              section: m.section ?? null,
+              position: j + 1,
+            });
+          });
+        });
+        let materialRowsOut: LearnMaterial[] = [];
+        if (materialInserts.length > 0) {
+          const { data: mi, error: merr } = await supabase
+            .from("learn_materials")
+            .insert(materialInserts)
+            .select("id, course_id, title, drive_file_id, section, position");
+          if (merr) {
+            // Materi gagal disimpan tidak membatalkan kursus/video yang sudah masuk
+            console.warn("[FilBuddy] Gagal menyimpan materi PDF:", merr.message);
+          } else {
+            materialRowsOut = ((mi ?? []) as Array<{
+              id: string; course_id: string; title: string; drive_file_id: string;
+              section: string | null; position: number;
+            }>).map((r) => ({
+              id: r.id,
+              courseId: r.course_id,
+              title: r.title,
+              driveFileId: r.drive_file_id,
+              section: r.section ?? undefined,
+              position: r.position,
+            }));
+          }
         }
 
         const newCounts: Record<string, number> = {};
@@ -539,13 +625,14 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({
           courses: [...courseRows, ...s.courses.filter((c) => !oldIds.includes(c.id))],
           lessons: [...lessonRowsOut, ...s.lessons.filter((l) => !oldIds.includes(l.courseId))],
+          materials: [...materialRowsOut, ...s.materials.filter((m) => !oldIds.includes(m.courseId))],
           done: s.done,
           counts: {
             ...Object.fromEntries(Object.entries(s.counts).filter(([cid]) => !oldIds.includes(cid))),
             ...newCounts,
           },
         }));
-        return { ok: true, courses: tree.length, lessons: totalLessons };
+        return { ok: true, courses: tree.length, lessons: totalLessons, materials: materialRowsOut.length };
       }
 
       // Mode lokal (demo / fallback)
@@ -568,20 +655,66 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
           position: j + 1,
           driveFileId: v.videoId,
           subtitleDriveFileId: v.subtitleId,
+          section: v.section,
+        }))
+      );
+      const newMaterials: LearnMaterial[] = tree.flatMap((c, i) =>
+        c.materials.map((m, j) => ({
+          id: uid(),
+          courseId: newCourses[i].id,
+          title: m.title,
+          driveFileId: m.fileId,
+          section: m.section,
+          position: j + 1,
         }))
       );
       persistDemo({
         courses: [...newCourses, ...state.courses.filter((c) => !removedIds.includes(c.id))],
         lessons: [...newLessons, ...state.lessons.filter((l) => !removedIds.includes(l.courseId))],
+        materials: [...newMaterials, ...state.materials.filter((m) => !removedIds.includes(m.courseId))],
         done: state.done,
         counts: {
           ...Object.fromEntries(Object.entries(state.counts).filter(([cid]) => !removedIds.includes(cid))),
           ...Object.fromEntries(newCourses.map((c, i) => [c.id, tree[i].videos.length])),
         },
       });
-      return { ok: true, courses: tree.length, lessons: totalLessons };
+      return { ok: true, courses: tree.length, lessons: totalLessons, materials: newMaterials.length };
     },
     [effMode, user, state, persistDemo]
+  );
+
+  // ---- Aksi: terjemahan subtitle via AI ----
+  const translateSubtitle = useCallback<LearnContextValue["translateSubtitle"]>(
+    async (lessonId, onProgress) => {
+      if (effMode !== "supabase") return { ok: false, error: "Terjemahan AI hanya tersedia saat database aktif." };
+      if (!aiReady()) return { ok: false, error: "NO_AI_CONFIG" };
+      const lesson = state.lessons.find((l) => l.id === lessonId);
+      if (!lesson) return { ok: false, error: "Pelajaran tidak ditemukan." };
+      const course = state.courses.find((c) => c.id === lesson.courseId);
+      if (!course) return { ok: false, error: "Kursus tidak ditemukan." };
+      if (course.authorId !== user?.id) return { ok: false, error: "Hanya penulis kursus yang bisa menerjemahkan." };
+      if (!lesson.subtitleDriveFileId && !lesson.subtitleUrl) {
+        return { ok: false, error: "Pelajaran ini belum punya subtitle." };
+      }
+      let raw = "";
+      try {
+        raw = await fetchSubtitleText(lesson);
+      } catch (e) {
+        return { ok: false, error: "Gagal mengambil subtitle: " + (e as Error).message };
+      }
+      const cues = parseSubtitleCues(raw);
+      if (cues.length === 0) return { ok: false, error: "Subtitle tidak bisa dibaca (format tidak dikenali)." };
+      const map = await translateCues(cues, onProgress);
+      const vtt = buildVtt(cues, map);
+      const { error } = await supabase!.from("learn_lessons").update({ subtitle_translated: vtt }).eq("id", lessonId);
+      if (error) return { ok: false, error: "Gagal menyimpan terjemahan: " + error.message };
+      setState((s) => ({
+        ...s,
+        lessons: s.lessons.map((l) => (l.id === lessonId ? { ...l, subtitleTranslated: vtt } : l)),
+      }));
+      return { ok: true };
+    },
+    [effMode, user, state]
   );
 
   const value = useMemo<LearnContextValue>(
@@ -595,8 +728,9 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       deleteCourse,
       toggleDone,
       syncFolder,
+      translateSubtitle,
     }),
-    [state, ready, store.ready, effMode, createCourse, addLesson, deleteLesson, deleteCourse, toggleDone, syncFolder]
+    [state, ready, store.ready, effMode, createCourse, addLesson, deleteLesson, deleteCourse, toggleDone, syncFolder, translateSubtitle]
   );
 
   return <LearnContext.Provider value={value}>{children}</LearnContext.Provider>;

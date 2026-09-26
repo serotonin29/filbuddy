@@ -20,6 +20,8 @@ create table public.learn_courses (
 
 -- Pelajaran: video dari Google Drive (drive_file_id) ATAU URL langsung (video_url).
 -- Subtitle opsional: file Drive (.srt/.vtt) atau URL .vtt langsung.
+-- section = nama bab/subfolder asal (hasil import folder); subtitle_translated =
+-- teks VTT hasil terjemahan AI (diisi penulis kursus).
 create table public.learn_lessons (
   id uuid primary key default gen_random_uuid(),
   course_id uuid not null references public.learn_courses(id) on delete cascade,
@@ -28,11 +30,24 @@ create table public.learn_lessons (
   video_url text,
   subtitle_drive_file_id text,
   subtitle_url text,
+  subtitle_translated text,
+  section text,
   position integer not null default 0,
   created_at timestamptz not null default now(),
   constraint learn_lessons_has_source check (
     coalesce(drive_file_id, video_url) is not null
   )
+);
+
+-- Materi PDF (lecture notes, dsb.) — hasil import folder / ditambah penulis
+create table public.learn_materials (
+  id uuid primary key default gen_random_uuid(),
+  course_id uuid not null references public.learn_courses(id) on delete cascade,
+  title text not null,
+  drive_file_id text not null,
+  section text,
+  position integer not null default 0,
+  created_at timestamptz not null default now()
 );
 
 -- Progres per user per pelajaran (selesai / belum)
@@ -48,12 +63,14 @@ create table public.learn_progress (
 create index idx_learn_courses_author on public.learn_courses(author_id, created_at desc);
 create index idx_learn_courses_folder on public.learn_courses(source_folder_id);
 create index idx_learn_lessons_course on public.learn_lessons(course_id, position);
+create index idx_learn_materials_course on public.learn_materials(course_id, position);
 create index idx_learn_progress_user on public.learn_progress(user_id);
 
 -- ==== ROW LEVEL SECURITY ====
 
 alter table public.learn_courses enable row level security;
 alter table public.learn_lessons enable row level security;
+alter table public.learn_materials enable row level security;
 alter table public.learn_progress enable row level security;
 
 -- Kursus: semua terautentikasi bisa baca; penulis kelola miliknya
@@ -81,6 +98,31 @@ create policy "learn_lessons_delete_owner" on public.learn_lessons
     exists (
       select 1 from public.learn_courses c
       where c.id = learn_lessons.course_id and c.author_id = auth.uid()
+    )
+  );
+create policy "learn_lessons_update_owner" on public.learn_lessons
+  for update to authenticated using (
+    exists (
+      select 1 from public.learn_courses c
+      where c.id = learn_lessons.course_id and c.author_id = auth.uid()
+    )
+  );
+
+-- Materi PDF: baca semua; kelola hanya penulis kursus terkait
+create policy "learn_materials_select" on public.learn_materials
+  for select to authenticated using (true);
+create policy "learn_materials_insert_owner" on public.learn_materials
+  for insert to authenticated with check (
+    exists (
+      select 1 from public.learn_courses c
+      where c.id = learn_materials.course_id and c.author_id = auth.uid()
+    )
+  );
+create policy "learn_materials_delete_owner" on public.learn_materials
+  for delete to authenticated using (
+    exists (
+      select 1 from public.learn_courses c
+      where c.id = learn_materials.course_id and c.author_id = auth.uid()
     )
   );
 

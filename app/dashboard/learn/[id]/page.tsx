@@ -2,8 +2,9 @@
 
 // ============================================================
 // Detail Kursus — player ala Udemy: playlist + progres selesai.
-// Penulis kursus dapat menambah video (link Google Drive / URL
-// langsung) dan subtitle (.srt/.vtt), serta menghapus materi.
+// Playlist dikelompokkan per section/bab (hasil import folder),
+// materi PDF bisa dibuka (viewer Drive), subtitle bisa diterjemahkan
+// otomatis ke Bahasa Indonesia via AI (penulis kursus).
 // ============================================================
 
 import { useMemo, useState } from "react";
@@ -11,22 +12,67 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useLearn } from "@/lib/learnStore";
 import { useStore } from "@/lib/store";
+import { aiReady } from "@/lib/ai";
+import type { LearnLesson } from "@/lib/learnTypes";
 import { VideoPlayer } from "@/components/learn/VideoPlayer";
 
 export default function CourseDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const { user } = useStore();
-  const { ready, mode, courses, lessons, done, addLesson, deleteLesson, deleteCourse, toggleDone } = useLearn();
+  const { ready, mode, courses, lessons, materials, done, addLesson, deleteLesson, deleteCourse, toggleDone, translateSubtitle } =
+    useLearn();
 
   const course = courses.find((c) => c.id === params.id);
   const courseLessons = useMemo(
     () => lessons.filter((l) => l.courseId === params.id).sort((a, b) => a.position - b.position),
     [lessons, params.id]
   );
+  const courseMaterials = useMemo(
+    () => materials.filter((m) => m.courseId === params.id).sort((a, b) => a.position - b.position),
+    [materials, params.id]
+  );
+
+  // Kelompokkan video per section (urutan kemunculan di DB)
+  const groups = useMemo(() => {
+    if (!courseLessons.some((l) => l.section)) return null;
+    const out: Array<{ name: string; items: LearnLesson[] }> = [];
+    const byName = new Map<string, { name: string; items: LearnLesson[] }>();
+    for (const l of courseLessons) {
+      const key = l.section ?? "Lainnya";
+      let g = byName.get(key);
+      if (!g) {
+        g = { name: key, items: [] };
+        byName.set(key, g);
+        out.push(g);
+      }
+      g.items.push(l);
+    }
+    return out;
+  }, [courseLessons]);
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({});
+  const idxMap = useMemo(() => new Map(courseLessons.map((l, i) => [l.id, i] as const)), [courseLessons]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const active = courseLessons.find((l) => l.id === activeId) ?? courseLessons[0] ?? null;
+
+  // Viewer PDF
+  const [pdf, setPdf] = useState<{ id: string; title: string } | null>(null);
+
+  // Terjemahan AI
+  const [translating, setTranslating] = useState(false);
+  const [transProg, setTransProg] = useState({ done: 0, total: 0 });
+  const [transError, setTransError] = useState("");
+  const runTranslate = async () => {
+    if (!active) return;
+    setTransError("");
+    setTranslating(true);
+    const res = await translateSubtitle(active.id, (d, t) => setTransProg({ done: d, total: t }));
+    setTranslating(false);
+    if (!res.ok) {
+      setTransError(res.error === "NO_AI_CONFIG" ? "Konfigurasi AI belum diisi di server." : res.error ?? "Gagal menerjemahkan.");
+    }
+  };
 
   // Form tambah video (penulis)
   const [lTitle, setLTitle] = useState("");
@@ -79,6 +125,61 @@ export default function CourseDetailPage() {
       return;
     }
     router.push("/dashboard/learn");
+  };
+
+  const renderLesson = (l: LearnLesson) => {
+    const i = idxMap.get(l.id) ?? 0;
+    const isActive = active?.id === l.id;
+    return (
+      <div key={l.id} className={`rounded-xl border transition-colors ${isActive ? "border-indigo-200 bg-indigo-50/70" : "border-transparent hover:bg-slate-50"}`}>
+        <button
+          type="button"
+          onClick={() => setActiveId(l.id)}
+          className="w-full flex items-start gap-2.5 p-2.5 text-left"
+        >
+          <span className={`material-symbols-outlined text-[20px] shrink-0 mt-0.5 ${done[l.id] ? "text-emerald-500" : isActive ? "text-indigo-500" : "text-slate-300"}`}>
+            {done[l.id] ? "check_circle" : "play_circle"}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="font-label-code text-[10px] text-slate-400">{String(i + 1).padStart(2, "0")}</span>
+            <span className={`block text-xs font-semibold leading-snug ${isActive ? "text-indigo-800" : "text-slate-700"}`}>
+              {l.title}
+            </span>
+          </span>
+        </button>
+        {isAuthor && (
+          <div className="px-2.5 pb-2 -mt-1 flex justify-end">
+            {confirmLessonId === l.id ? (
+              <span className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void removeLesson(l.id)}
+                  className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 hover:bg-rose-100 transition-colors"
+                >
+                  Yakin hapus?
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmLessonId(null)}
+                  className="text-[10px] font-semibold text-slate-500 hover:underline"
+                >
+                  Batal
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Hapus video ${l.title}`}
+                onClick={() => setConfirmLessonId(l.id)}
+                className="text-slate-300 hover:text-rose-500 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[16px]">delete</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   if (!ready) {
@@ -178,6 +279,38 @@ export default function CourseDetailPage() {
               {isAuthor && <p className="text-xs text-slate-400">Tambahkan video pertama lewat panel di bawah.</p>}
             </div>
           )}
+
+          {/* Terjemahan AI (penulis kursus) */}
+          {active && isAuthor && (active.subtitleDriveFileId || active.subtitleUrl) && (
+            <div className="rounded-xl border border-slate-200 bg-white p-3 flex flex-wrap items-center gap-2">
+              <span className="material-symbols-outlined text-[18px] text-violet-500">translate</span>
+              {aiReady() ? (
+                <button
+                  type="button"
+                  onClick={() => void runTranslate()}
+                  disabled={translating}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-violet-600 text-white text-xs font-bold hover:bg-violet-700 disabled:opacity-60 transition-colors"
+                >
+                  {translating ? (
+                    <>
+                      <span className="material-symbols-outlined text-[16px] animate-spin">progress_activity</span>
+                      Menerjemahkan… {transProg.done}/{transProg.total || "?"} batch
+                    </>
+                  ) : (
+                    <>{active.subtitleTranslated ? "Perbarui Terjemahan AI" : "Terjemahkan Subtitle (AI)"}</>
+                  )}
+                </button>
+              ) : (
+                <span className="text-xs text-slate-500">Konfigurasi AI belum diisi — terjemahan otomatis nonaktif.</span>
+              )}
+              {active.subtitleTranslated && !translating && (
+                <span className="text-[11px] font-semibold text-emerald-600">
+                  Terjemahan siap — penonton bisa pilih &ldquo;ID&rdquo; di bawah video.
+                </span>
+              )}
+              {transError && <span className="text-xs font-semibold text-rose-600">{transError}</span>}
+            </div>
+          )}
         </div>
 
         {/* Playlist */}
@@ -185,66 +318,95 @@ export default function CourseDetailPage() {
           <p className="font-label-ui text-xs font-bold text-slate-900 uppercase tracking-wide px-1 mb-2">
             Daftar Video ({courseLessons.length})
           </p>
-          <div className="flex flex-col gap-1 max-h-[420px] overflow-y-auto">
-            {courseLessons.map((l, i) => {
-              const isActive = active?.id === l.id;
-              return (
-                <div key={l.id} className={`rounded-xl border transition-colors ${isActive ? "border-indigo-200 bg-indigo-50/70" : "border-transparent hover:bg-slate-50"}`}>
-                  <button
-                    type="button"
-                    onClick={() => setActiveId(l.id)}
-                    className="w-full flex items-start gap-2.5 p-2.5 text-left"
-                  >
-                    <span className={`material-symbols-outlined text-[20px] shrink-0 mt-0.5 ${done[l.id] ? "text-emerald-500" : isActive ? "text-indigo-500" : "text-slate-300"}`}>
-                      {done[l.id] ? "check_circle" : "play_circle"}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="font-label-code text-[10px] text-slate-400">{String(i + 1).padStart(2, "0")}</span>
-                      <span className={`block text-xs font-semibold leading-snug ${isActive ? "text-indigo-800" : "text-slate-700"}`}>
-                        {l.title}
+          {groups ? (
+            <div className="flex flex-col gap-2 max-h-[420px] overflow-y-auto">
+              {groups.map((g) => {
+                const open = openSections[g.name] !== false;
+                return (
+                  <div key={g.name}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenSections((s) => ({ ...s, [g.name]: !open }))}
+                      className="w-full flex items-center justify-between px-2 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 text-left transition-colors"
+                    >
+                      <span className="text-[11px] font-bold text-slate-700 truncate">{g.name}</span>
+                      <span className="text-[10px] font-semibold text-slate-400 shrink-0 ml-2">
+                        {open ? "▾" : "▸"} {g.items.length}
                       </span>
-                    </span>
+                    </button>
+                    {open && <div className="flex flex-col gap-1 mt-1">{g.items.map(renderLesson)}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1 max-h-[420px] overflow-y-auto">{courseLessons.map(renderLesson)}</div>
+          )}
+          {courseLessons.length === 0 && (
+            <p className="text-xs text-slate-400 px-1 py-4 text-center">Playlist masih kosong.</p>
+          )}
+
+          {/* Materi bacaan (PDF) */}
+          {courseMaterials.length > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-100">
+              <p className="font-label-ui text-xs font-bold text-slate-900 uppercase tracking-wide px-1 mb-2">
+                Materi Bacaan ({courseMaterials.length})
+              </p>
+              <div className="flex flex-col gap-1 max-h-[240px] overflow-y-auto">
+                {courseMaterials.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setPdf({ id: m.driveFileId, title: m.title })}
+                    className="w-full flex items-center gap-2.5 p-2.5 rounded-xl border border-transparent hover:bg-slate-50 text-left transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-[20px] text-rose-500 shrink-0">picture_as_pdf</span>
+                    <span className="min-w-0 flex-1 text-xs font-semibold text-slate-700 truncate">{m.title}</span>
+                    <span className="text-[10px] font-bold text-indigo-600 shrink-0">Buka</span>
                   </button>
-                  {isAuthor && (
-                    <div className="px-2.5 pb-2 -mt-1 flex justify-end">
-                      {confirmLessonId === l.id ? (
-                        <span className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => void removeLesson(l.id)}
-                            className="text-[10px] font-bold text-rose-600 bg-rose-50 border border-rose-200 rounded-lg px-2 py-1 hover:bg-rose-100 transition-colors"
-                          >
-                            Yakin hapus?
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmLessonId(null)}
-                            className="text-[10px] font-semibold text-slate-500 hover:underline"
-                          >
-                            Batal
-                          </button>
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          aria-label={`Hapus video ${l.title}`}
-                          onClick={() => setConfirmLessonId(l.id)}
-                          className="text-slate-300 hover:text-rose-500 transition-colors"
-                        >
-                          <span className="material-symbols-outlined text-[16px]">delete</span>
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {courseLessons.length === 0 && (
-              <p className="text-xs text-slate-400 px-1 py-4 text-center">Playlist masih kosong.</p>
-            )}
-          </div>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
       </div>
+
+      {/* Viewer PDF */}
+      {pdf && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6" role="dialog" aria-modal="true" aria-label={pdf.title}>
+          <div className="absolute inset-0 bg-slate-950/70" onClick={() => setPdf(null)} />
+          <div className="relative w-full max-w-4xl rounded-2xl bg-white overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-200">
+              <p className="text-sm font-bold text-slate-900 truncate flex items-center gap-2 min-w-0">
+                <span className="material-symbols-outlined text-[18px] text-rose-500 shrink-0">picture_as_pdf</span>
+                <span className="truncate">{pdf.title}</span>
+              </p>
+              <a
+                href={`https://drive.google.com/file/d/${pdf.id}/view`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] font-bold text-indigo-600 hover:text-indigo-800 shrink-0"
+              >
+                Tab baru
+              </a>
+              <button
+                type="button"
+                onClick={() => setPdf(null)}
+                aria-label="Tutup"
+                className="text-slate-400 hover:text-slate-700 transition-colors shrink-0"
+              >
+                <span className="material-symbols-outlined text-[20px]">close</span>
+              </button>
+            </div>
+            <iframe
+              src={`https://drive.google.com/file/d/${pdf.id}/preview`}
+              className="w-full h-[70vh] bg-slate-100"
+              title={pdf.title}
+              allow="autoplay"
+            />
+          </div>
+        </div>
+      )}
 
       {/* Panel penulis */}
       {isAuthor && (

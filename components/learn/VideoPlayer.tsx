@@ -7,7 +7,7 @@
 // ============================================================
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { videoSrcChain, useDriveSubtitle } from "@/lib/drive";
+import { videoSrcChain, useDriveSubtitle, useTextSubtitle } from "@/lib/drive";
 import type { LearnLesson } from "@/lib/learnTypes";
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2] as const;
@@ -26,16 +26,22 @@ export function VideoPlayer({ lesson, onEnded }: { lesson: LearnLesson; onEnded?
   const [failed, setFailed] = useState(false);
   const [speed, setSpeed] = useState<number>(1);
   const [subOn, setSubOn] = useState(true);
+  /** Bahasa subtitle aktif: "asli" = file asli, "id" = hasil terjemahan AI */
+  const [subLang, setSubLang] = useState<"asli" | "id">("id");
 
   const chain = useMemo(() => videoSrcChain(lesson), [lesson.id]);
   const src = chain[Math.min(srcIdx, chain.length - 1)];
-  const sub = useDriveSubtitle(lesson);
+  const origSub = useDriveSubtitle(lesson);
+  const transSub = useTextSubtitle(lesson.subtitleTranslated ?? null);
+  const hasTrans = !!lesson.subtitleTranslated;
+  const activeSubUrl = subLang === "id" && hasTrans ? transSub : origSub.url;
 
   // Ganti pelajaran → reset state player
   useEffect(() => {
     setSrcIdx(0);
     setFailed(false);
     setSpeed(1);
+    setSubLang("id");
     if (videoRef.current) videoRef.current.playbackRate = 1;
   }, [lesson.id]);
 
@@ -48,7 +54,7 @@ export function VideoPlayer({ lesson, onEnded }: { lesson: LearnLesson; onEnded?
   useEffect(() => {
     const t = trackRef.current?.track;
     if (t) t.mode = subOn ? "showing" : "disabled";
-  }, [subOn, sub.url]);
+  }, [subOn, activeSubUrl]);
 
   const onError = () => {
     if (srcIdx < chain.length - 1) {
@@ -120,13 +126,13 @@ export function VideoPlayer({ lesson, onEnded }: { lesson: LearnLesson; onEnded?
           onLoadedMetadata={onLoadedMetadata}
           onEnded={onEndedAll}
         >
-          {sub.url && (
+          {activeSubUrl && (
             <track
               ref={trackRef}
               kind="subtitles"
-              srcLang="id"
-              label="Indonesia"
-              src={sub.url}
+              srcLang={subLang === "id" && hasTrans ? "id" : "en"}
+              label={subLang === "id" && hasTrans ? "Indonesia (AI)" : "Asli"}
+              src={activeSubUrl}
               default={subOn}
             />
           )}
@@ -168,7 +174,31 @@ export function VideoPlayer({ lesson, onEnded }: { lesson: LearnLesson; onEnded?
         >
           <span className="material-symbols-outlined text-[16px]">speed</span> {SPEED_LABEL[speed] ?? "1x"}
         </button>
-        {sub.url && (
+        {origSub.url && hasTrans && (
+          <span className="inline-flex rounded-xl border border-slate-200 overflow-hidden" role="group" aria-label="Bahasa subtitle">
+            {(["asli", "id"] as const).map((l) => {
+              const isActive = subOn && subLang === l;
+              return (
+                <button
+                  key={l}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => {
+                    setSubLang(l);
+                    setSubOn(true);
+                  }}
+                  className={`px-3 py-1.5 text-xs font-semibold transition-colors ${
+                    isActive ? "bg-indigo-600 text-white" : "bg-white text-slate-500 hover:text-indigo-700"
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-[16px] align-[-3px]">closed_caption</span>{" "}
+                  {l === "id" ? "ID" : "Asli"}
+                </button>
+              );
+            })}
+          </span>
+        )}
+        {origSub.url && !hasTrans && (
           <button
             type="button"
             aria-pressed={subOn}
@@ -183,8 +213,8 @@ export function VideoPlayer({ lesson, onEnded }: { lesson: LearnLesson; onEnded?
             Subtitle {subOn ? "aktif" : "mati"}
           </button>
         )}
-        {sub.loading && <span className="text-xs text-slate-400">Memuat subtitle…</span>}
-        {sub.error && <span className="text-xs text-amber-600">{sub.error}</span>}
+        {origSub.loading && <span className="text-xs text-slate-400">Memuat subtitle…</span>}
+        {origSub.error && <span className="text-xs text-amber-600">{origSub.error}</span>}
       </div>
     </div>
   );

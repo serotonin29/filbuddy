@@ -27,6 +27,20 @@ export type LearnLesson = {
   subtitleDriveFileId?: string;
   /** URL subtitle .vtt langsung */
   subtitleUrl?: string;
+  /** Teks VTT hasil terjemahan AI (oleh penulis kursus) */
+  subtitleTranslated?: string;
+  /** Nama section/bab asal video (hasil import folder) */
+  section?: string;
+};
+
+/** Materi bacaan PDF pada kursus (hasil import folder Drive) */
+export type LearnMaterial = {
+  id: string;
+  courseId: string;
+  title: string;
+  driveFileId: string;
+  section?: string;
+  position: number;
 };
 
 export type LearnActionResult = { ok: boolean; error?: string; id?: string };

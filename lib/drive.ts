@@ -143,10 +143,14 @@ export function useDriveSubtitle(
 
 export type DriveFile = { id: string; name: string; mimeType: string; size?: string };
 
+export type DriveVideo = { title: string; videoId: string; subtitleId?: string; section?: string };
+export type DriveMaterial = { title: string; fileId: string; section?: string };
+
 export type DriveCourseTree = {
   name: string;
   folderId: string;
-  videos: { title: string; videoId: string; subtitleId?: string }[];
+  videos: DriveVideo[];
+  materials: DriveMaterial[];
 };
 
 const FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -169,6 +173,10 @@ export function isVideoFile(f: DriveFile): boolean {
 
 function isSubtitleFile(f: DriveFile): boolean {
   return SUB_EXTS.includes(extOf(f.name));
+}
+
+function isPdfFile(f: DriveFile): boolean {
+  return f.mimeType === "application/pdf" || extOf(f.name) === "pdf";
 }
 
 /** Pair video ↔ subtitle berdasarkan nama file yang sama (tanpa ekstensi). */
@@ -204,38 +212,48 @@ export async function listDriveChildren(folderId: string, apiKey: string): Promi
 }
 
 /**
- * Telusuri folder publik → pohon kursus.
- * - Subfolder menjadi "kursus" (judul = nama subfolder)
- * - Video langsung di root menjadi satu kursus "Materi Utama"
- * Batas aman: kedalaman 3, maksimal 60 folder.
+ * Telusuri folder publik → pohon kursus (struktur ala Udemy):
+ * - Folder level-1 di bawah root = SATU KURSUS (judul = nama foldernya)
+ * - Subfolder di dalamnya = SECTION (nama bab), termasuk bertingkat ("A › B")
+ * - Video langsung di root = satu kursus dengan nama folder root
+ * - File PDF di mana pun dikumpulkan sebagai materi kursus terkait
+ * Batas aman: kedalaman 4 dari root, maksimal 100 folder.
  */
 export async function walkDriveFolder(
   rootFolderId: string,
   apiKey: string,
   opts?: { maxDepth?: number; maxFolders?: number }
 ): Promise<DriveCourseTree[]> {
-  const maxDepth = opts?.maxDepth ?? 3;
+  const maxDepth = opts?.maxDepth ?? 4;
   const maxFolders = opts?.maxFolders ?? 100;
   let budget = maxFolders;
 
   const courses: DriveCourseTree[] = [];
 
-  async function walk(folderId: string, name: string, depth: number): Promise<void> {
+  /** Kumpulkan video+pdf rekursif di dalam satu kursus; label section dari path subfolder. */
+  async function collect(
+    folderId: string,
+    section: string,
+    depth: number,
+    out: { videos: DriveVideo[]; materials: DriveMaterial[] }
+  ): Promise<void> {
     if (budget <= 0) return;
     budget -= 1;
     const files = await listDriveChildren(folderId, apiKey);
-    const paired = pairFolderFiles(files);
-    if (paired.length > 0) {
-      courses.push({ name, folderId, videos: paired.map((p) => ({ title: p.title, videoId: p.videoId, subtitleId: p.subtitleId })) });
+    for (const p of pairFolderFiles(files)) {
+      out.videos.push({ title: p.title, videoId: p.videoId, subtitleId: p.subtitleId, section: section || undefined });
+    }
+    for (const f of files.filter(isPdfFile)) {
+      out.materials.push({ title: baseName(f.name), fileId: f.id, section: section || undefined });
     }
     if (depth < maxDepth) {
       for (const sf of files.filter((f) => f.mimeType === FOLDER_MIME)) {
-        await walk(sf.id, sf.name, depth + 1);
+        await collect(sf.id, section ? `${section} › ${sf.name}` : sf.name, depth + 1, out);
       }
     }
   }
 
-  // Nama folder root untuk grup video yang langsung di root
+  // Nama folder root untuk kursus video yang langsung di root
   let rootName = "Materi Utama";
   try {
     const r = await fetch(`https://www.googleapis.com/drive/v3/files/${rootFolderId}?fields=name&key=${apiKey}&supportsAllDrives=true`);
@@ -248,15 +266,101 @@ export async function walkDriveFolder(
   }
 
   const rootFiles = await listDriveChildren(rootFolderId, apiKey);
-  const rootVideos = pairFolderFiles(rootFiles);
-  if (rootVideos.length > 0) {
-    courses.push({ name: rootName, folderId: rootFolderId, videos: rootVideos.map((p) => ({ title: p.title, videoId: p.videoId, subtitleId: p.subtitleId })) });
+  budget -= 1;
+
+  const rootOut: { videos: DriveVideo[]; materials: DriveMaterial[] } = { videos: [], materials: [] };
+  for (const p of pairFolderFiles(rootFiles)) {
+    rootOut.videos.push({ title: p.title, videoId: p.videoId, subtitleId: p.subtitleId });
   }
+  for (const f of rootFiles.filter(isPdfFile)) {
+    rootOut.materials.push({ title: baseName(f.name), fileId: f.id });
+  }
+  if (rootOut.videos.length > 0) {
+    courses.push({ name: rootName, folderId: rootFolderId, videos: rootOut.videos, materials: rootOut.materials });
+  }
+
   for (const sf of rootFiles.filter((f) => f.mimeType === FOLDER_MIME)) {
-    await walk(sf.id, sf.name, 1);
+    const out: { videos: DriveVideo[]; materials: DriveMaterial[] } = { videos: [], materials: [] };
+    await collect(sf.id, "", 1, out);
+    if (out.videos.length > 0) {
+      courses.push({ name: sf.name, folderId: sf.id, videos: out.videos, materials: out.materials });
+    }
   }
 
   return courses;
+}
+
+/**
+ * Ambil TEKS subtitle mentah (SRT/VTT) — dipakai fitur terjemahan AI.
+ * Rantai sumber sama dengan pemutar video: googleapis → uc.
+ */
+export async function fetchSubtitleText(
+  sub: { subtitleDriveFileId?: string; subtitleUrl?: string } | null | undefined
+): Promise<string> {
+  if (!sub) throw new Error("Pelajaran tidak memiliki subtitle.");
+  if (sub.subtitleDriveFileId) {
+    const urls: string[] = [];
+    const apiKey = driveApiKey();
+    if (apiKey) urls.push(`https://www.googleapis.com/drive/v3/files/${sub.subtitleDriveFileId}?alt=media&key=${apiKey}`);
+    urls.push(`https://drive.google.com/uc?export=download&id=${sub.subtitleDriveFileId}`);
+    return fetchTextChain(urls);
+  }
+  if (sub.subtitleUrl) return fetchTextChain([sub.subtitleUrl]);
+  throw new Error("Pelajaran tidak memiliki subtitle.");
+}
+
+/** Hook: teks VTT (mis. hasil terjemahan) → Blob URL untuk <track src>. */
+export function useTextSubtitle(text: string | null | undefined): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!text) {
+      setUrl(null);
+      return;
+    }
+    const blob = new Blob([/^\s*WEBVTT/.test(text) ? text : `WEBVTT\n\n${text}`], { type: "text/vtt" });
+    const u = URL.createObjectURL(blob);
+    setUrl(u);
+    return () => URL.revokeObjectURL(u);
+  }, [text]);
+  return url;
+}
+
+// ============================================================
+// Parsing subtitle untuk terjemahan AI
+// ============================================================
+
+export type ParsedCue = { i: number; start: string; end: string; text: string };
+
+/** Pecah SRT/VTT → daftar cue bernomor (timestamp dipertahankan). */
+export function parseSubtitleCues(raw: string): ParsedCue[] {
+  const body = raw
+    .replace(/\r+/g, "")
+    .replace(/^\uFEFF/, "")
+    .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, "$1.$2");
+  const cues: ParsedCue[] = [];
+  for (const block of body.split(/\n{2,}/)) {
+    const lines = block.split("\n").filter((l) => l.trim() !== "");
+    if (lines.length === 0) continue;
+    let li = 0;
+    if (/^\d+$/.test(lines[0].trim()) && lines.length > 1) li = 1;
+    const tm = lines[li]?.match(/(\d{1,2}:\d{2}:\d{2}[.,]\d{3})\s*-->\s*(\d{1,2}:\d{2}:\d{2}[.,]\d{3})/);
+    if (!tm) continue;
+    const text = lines.slice(li + 1).join(" ").trim();
+    if (text) cues.push({ i: cues.length, start: tm[1].replace(",", "."), end: tm[2].replace(",", "."), text });
+  }
+  return cues;
+}
+
+/** Susun kembali cue → teks VTT utuh, memakai terjemahan bila tersedia. */
+export function buildVtt(cues: ParsedCue[], translations?: Map<number, string>): string {
+  const lines: string[] = ["WEBVTT", ""];
+  cues.forEach((c, idx) => {
+    lines.push(String(idx + 1));
+    lines.push(`${c.start} --> ${c.end}`);
+    lines.push(translations?.get(c.i) || c.text);
+    lines.push("");
+  });
+  return lines.join("\n");
 }
 
 /** Contoh video publik untuk seed mode demo (bukan Drive, langsung mp4). */
