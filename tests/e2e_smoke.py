@@ -110,8 +110,45 @@ with sync_playwright() as p:
     page.locator("button[aria-label='Tutup']").first.click()
     page.wait_for_timeout(300)
 
-    # ---------- 8. Slot page + logout ----------
-    print("\n[8] Slot page & logout")
+    # ---------- 8. Kelas Belajar: buat kursus + tambah video + progres ----------
+    print("\n[8] Kelas Belajar - kursus, video, subtitle, progres")
+    page.goto(f"{BASE}/dashboard/learn")
+    page.wait_for_load_state("networkidle")
+    check("halaman Kelas Belajar tampil", page.locator("text=Kelas Belajar").count() > 0)
+    check("tab Kelas Belajar di header", page.locator("header >> text=Kelas Belajar").count() > 0)
+    check("item Belajar di bottom nav", page.locator("nav >> text=Belajar").count() > 0)
+
+    COURSE_TITLE = f"Kursus E2E Test {account['email'].split('@')[0][-6:]}"
+    page.click("a[href='/dashboard/learn/new']")
+    page.wait_for_selector("text=Buat Kursus Baru", timeout=5000)
+    page.fill("#course-title", COURSE_TITLE)
+    page.fill("#course-desc", "Kursus hasil e2e untuk memastikan fitur kelas belajar bekerja.")
+    page.locator("#course-cat").select_option("Web Dev")
+    page.locator("button:has-text('Buat Kursus')").click()
+    page.wait_for_selector("text=Kelola Materi", timeout=8000)
+    check("redirect ke detail kursus", "/dashboard/learn/" in page.url)
+
+    page.fill("input[placeholder*='Judul video']", "Video E2E: intro singkat")
+    page.fill(
+        "input[placeholder*='Link video']",
+        "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4",
+    )
+    page.click("button:has-text('Tambah Video')")
+    page.wait_for_selector("text=Video E2E: intro singkat", timeout=8000)
+    check("video muncul di playlist", True)
+    check("elemen video dirender", page.locator("video").count() > 0)
+
+    page.locator("button:has-text('Tandai Selesai')").click()
+    page.wait_for_selector("text=1 dari 1 video selesai", timeout=5000)
+    check("progres selesai tercatat", True)
+
+    page.goto(f"{BASE}/dashboard/learn")
+    page.wait_for_load_state("networkidle")
+    check("kartu kursus baru tampil di daftar", page.locator(f"text={COURSE_TITLE}").count() > 0)
+    check("jumlah video tercatat di kartu", page.locator("text=1 video").count() > 0)
+
+    # ---------- 9. Slot page + logout ----------
+    print("\n[9] Slot page & logout")
     page.goto(f"{BASE}/dashboard/slot")
     page.wait_for_load_state("networkidle")
     check("halaman slot tampil", page.locator("text=Slot Barter Saya").count() > 0)
@@ -121,8 +158,8 @@ with sync_playwright() as p:
     page.wait_for_url("**/login", timeout=10000)
     check("logout kembali ke /login", "/login" in page.url)
 
-    # ---------- 9. Console errors ----------
-    print("\n[9] Console errors")
+    # ---------- 10. Console errors ----------
+    print("\n[10] Console errors")
     real_errors = [e for e in console_errors if not e.startswith("Failed to load resource")]
     check(f"tidak ada console error ({len(real_errors)} ditemukan)", len(real_errors) == 0)
 

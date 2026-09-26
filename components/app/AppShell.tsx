@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { CommunityProvider } from "@/lib/communityStore";
+import { LearnProvider } from "@/lib/learnStore";
 import { MessagesProvider, useMessages } from "@/lib/messagesStore";
 import { BottomNav } from "@/components/app/BottomNav";
 import { SearchCommand } from "@/components/app/SearchCommand";
@@ -14,6 +15,7 @@ import type { Activity, User } from "@/lib/storeTypes";
 const navTabs = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/dashboard/katalog", label: "Katalog Skill" },
+  { href: "/dashboard/learn", label: "Kelas Belajar" },
   { href: "/dashboard/forum", label: "Forum Tanya Jawab" },
   { href: "/dashboard/community", label: "Community" },
   { href: "/dashboard/messages", label: "Pesan" },
@@ -319,7 +321,9 @@ function AppShellInner({ user, children }: { user: User; children: React.ReactNo
       </header>
 
       <main className="flex-1 w-full max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 pb-24 lg:pb-8">
-        <CommunityProvider>{children}</CommunityProvider>
+        <CommunityProvider>
+          <LearnProvider>{children}</LearnProvider>
+        </CommunityProvider>
       </main>
 
       <BottomNav unreadMessages={unreadMessages} />

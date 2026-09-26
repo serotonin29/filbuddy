@@ -10,6 +10,7 @@ import { usePathname } from "next/navigation";
 const items = [
   { href: "/dashboard", label: "Home", icon: "home", exact: true },
   { href: "/dashboard/katalog", label: "Explore", icon: "explore" },
+  { href: "/dashboard/learn", label: "Belajar", icon: "school" },
   { href: "/dashboard/community", label: "Community", icon: "diversity_3" },
   { href: "/dashboard/messages", label: "Messages", icon: "chat_bubble" },
   { href: "/dashboard/profile", label: "Profile", icon: "person" },
@@ -27,7 +28,7 @@ export function BottomNav({ unreadMessages = 0 }: { unreadMessages?: number }) {
       className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
-      <div className="grid grid-cols-5">
+      <div className="grid grid-cols-6">
         {items.map((it) => {
           const active = isActive(it.href, it.exact);
           return (
