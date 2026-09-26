@@ -14,12 +14,15 @@ import { parseDriveId, driveApiKey, walkDriveFolder, type DriveCourseTree, DEMO_
 import type { LearnActionResult, LearnCourse, LearnLesson } from "./learnTypes";
 
 const LS_KEY = "filbuddy-learn-demo-v1";
+const CACHE_KEY = "filbuddy-learn-cache-v1";
 
 type LearnState = {
   courses: LearnCourse[];
   lessons: LearnLesson[];
   /** lessonId → ISO waktu selesai */
   done: Record<string, string>;
+  /** courseId → jumlah video (grid render instan tanpa menunggu daftar video) */
+  counts: Record<string, number>;
 };
 
 type LessonInput = { title: string; video: string; subtitle?: string };
@@ -82,6 +85,7 @@ function demoSeed(): LearnState {
       mk("demo-course-sql", "LEFT JOIN vs INNER JOIN", 2, "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4"),
     ],
     done: {},
+    counts: {},
   };
 }
 
@@ -91,7 +95,7 @@ function loadDemoState(): LearnState {
     if (raw) {
       const parsed = JSON.parse(raw) as LearnState;
       if (Array.isArray(parsed.courses) && Array.isArray(parsed.lessons)) {
-        return { courses: parsed.courses, lessons: parsed.lessons, done: parsed.done ?? {} };
+        return { courses: parsed.courses, lessons: parsed.lessons, done: parsed.done ?? {}, counts: {} };
       }
     }
   } catch {
@@ -164,7 +168,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
 
   /** true kalau tabel learn_* belum ada di Supabase → fallback lokal */
   const [dbMissing, setDbMissing] = useState(false);
-  const [state, setState] = useState<LearnState>({ courses: [], lessons: [], done: {} });
+  const [state, setState] = useState<LearnState>({ courses: [], lessons: [], done: {}, counts: {} });
   const [ready, setReady] = useState(false);
   const loadedKeyRef = useRef<string | null>(null);
 
@@ -186,13 +190,39 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
 
     setReady(false);
     (async () => {
-      const [cRes, lRes, pRes] = await Promise.all([
-        supabase!.from("learn_courses").select("*, profiles!learn_courses_author_id_fkey(name)").order("created_at", { ascending: false }),
-        supabase!.from("learn_lessons").select("*").order("position"),
-        supabase!.from("learn_progress").select("lesson_id, completed_at").eq("user_id", user!.id!),
-      ]);
+      // 1) Cache sesi → grid langsung tampil tanpa menunggu jaringan,
+      //    data tetap disegarkan di langkah berikutnya.
+      const cacheKey = `${CACHE_KEY}:${user!.id!}`;
+      try {
+        const raw = sessionStorage.getItem(cacheKey);
+        if (raw) {
+          const c = JSON.parse(raw) as LearnState;
+          if (Array.isArray(c.courses) && Array.isArray(c.lessons)) {
+            setState({ courses: c.courses, lessons: c.lessons, done: c.done ?? {}, counts: c.counts ?? {} });
+            setReady(true);
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+
+      // 2) Query ringan: kursus + nama penulis + JUMLAH video (agregat embedded).
+      //    Grid tidak perlu menunggu daftar 400-an video untuk render.
+      let cRes = await supabase!
+        .from("learn_courses")
+        .select("*, profiles!learn_courses_author_id_fkey(name), lessons:learn_lessons(count)")
+        .order("created_at", { ascending: false });
       if (cancelled) return;
-      const cErr = cRes.error;
+      let cErr = cRes.error;
+      if (cErr && !cErr.message.includes("does not exist") && !cErr.message.includes("schema cache") && cErr.code !== "PGRST205") {
+        // Fallback: agregat count tidak didukung → ulangi tanpa count
+        cRes = await supabase!
+          .from("learn_courses")
+          .select("*, profiles!learn_courses_author_id_fkey(name)")
+          .order("created_at", { ascending: false });
+        cErr = cRes.error;
+        if (cancelled) return;
+      }
       if (cErr && (cErr.code === "PGRST205" || cErr.message.includes("schema cache") || cErr.message.includes("does not exist"))) {
         console.warn("[FilBuddy] Tabel learn_* belum ada — jalankan supabase/learn_tables.sql. Kelas Belajar memakai mode lokal.");
         setDbMissing(true);
@@ -200,7 +230,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       }
       const courses: LearnCourse[] = ((cRes.data ?? []) as Array<{
         id: string; author_id: string; title: string; description: string; category: string; created_at: string;
-        profiles: { name: string } | null;
+        profiles: { name: string } | null; lessons?: Array<{ count?: number }>;
       }>).map((r) => ({
         id: r.id,
         title: r.title,
@@ -210,6 +240,19 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         authorName: r.profiles?.name ?? "Mahasiswa",
         createdAt: r.created_at,
       }));
+      const counts: Record<string, number> = {};
+      for (const r of (cRes.data ?? []) as Array<{ id: string; lessons?: Array<{ count?: number }> }>) {
+        counts[r.id] = Array.isArray(r.lessons) && r.lessons[0]?.count != null ? Number(r.lessons[0].count) : 0;
+      }
+      setState((s) => ({ ...s, courses }));
+      setReady(true);
+
+      // 3) Query berat di belakang: daftar video lengkap + progres pribadi
+      const [lRes, pRes] = await Promise.all([
+        supabase!.from("learn_lessons").select("*").order("position"),
+        supabase!.from("learn_progress").select("lesson_id, completed_at").eq("user_id", user!.id!),
+      ]);
+      if (cancelled) return;
       const lessons: LearnLesson[] = ((lRes.data ?? []) as Array<{
         id: string; course_id: string; title: string; position: number;
         drive_file_id: string | null; video_url: string | null;
@@ -228,14 +271,23 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
       for (const p of (pRes.data ?? []) as Array<{ lesson_id: string; completed_at: string }>) {
         done[p.lesson_id] = p.completed_at;
       }
-      setState({ courses, lessons, done });
-      setReady(true);
+      setState((s) => ({ ...s, lessons, done }));
     })();
 
     return () => {
       cancelled = true;
     };
   }, [loadKey, effMode]);
+
+  // Tulis cache sesi setiap state berubah (kunjungan berikutnya = render instan)
+  useEffect(() => {
+    if (effMode !== "supabase" || !ready || !user?.id) return;
+    try {
+      sessionStorage.setItem(`${CACHE_KEY}:${user.id}`, JSON.stringify(state));
+    } catch {
+      /* ignore */
+    }
+  }, [state, effMode, ready, user?.id]);
 
   const persistDemo = useCallback((next: LearnState) => {
     setState(next);
@@ -267,6 +319,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
             { id, title, description: c.description.trim(), category: c.category, authorId: uidNow, authorName: user?.name ?? "Kamu", createdAt: new Date().toISOString() },
             ...s.courses,
           ],
+          counts: { ...s.counts, [id]: 0 },
         }));
         return { ok: true, id };
       }
@@ -297,6 +350,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         courses: state.courses.filter((c) => c.id !== courseId),
         lessons: state.lessons.filter((l) => l.courseId !== courseId),
         done: Object.fromEntries(Object.entries(state.done).filter(([lid]) => !state.lessons.some((l) => l.id === lid && l.courseId === courseId))),
+        counts: Object.fromEntries(Object.entries(state.counts).filter(([cid]) => cid !== courseId)),
       });
       return { ok: true };
     },
@@ -336,6 +390,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({
           ...s,
           lessons: [...s.lessons, { id, courseId, title, position, ...f }],
+          counts: { ...s.counts, [courseId]: (s.counts[courseId] ?? 0) + 1 },
         }));
         return { ok: true, id };
       }
@@ -359,6 +414,7 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         courses: state.courses,
         lessons: state.lessons.filter((l) => l.id !== lessonId),
         done: Object.fromEntries(Object.entries(state.done).filter(([lid]) => lid !== lessonId)),
+        counts: { ...state.counts, [courseId]: Math.max(0, (state.counts[courseId] ?? 1) - 1) },
       });
       return { ok: true };
     },
@@ -476,10 +532,18 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
           }));
         }
 
+        const newCounts: Record<string, number> = {};
+        rows.forEach((r, i) => {
+          newCounts[r.id] = tree[i].videos.length;
+        });
         setState((s) => ({
           courses: [...courseRows, ...s.courses.filter((c) => !oldIds.includes(c.id))],
           lessons: [...lessonRowsOut, ...s.lessons.filter((l) => !oldIds.includes(l.courseId))],
           done: s.done,
+          counts: {
+            ...Object.fromEntries(Object.entries(s.counts).filter(([cid]) => !oldIds.includes(cid))),
+            ...newCounts,
+          },
         }));
         return { ok: true, courses: tree.length, lessons: totalLessons };
       }
@@ -510,6 +574,10 @@ export function LearnProvider({ children }: { children: React.ReactNode }) {
         courses: [...newCourses, ...state.courses.filter((c) => !removedIds.includes(c.id))],
         lessons: [...newLessons, ...state.lessons.filter((l) => !removedIds.includes(l.courseId))],
         done: state.done,
+        counts: {
+          ...Object.fromEntries(Object.entries(state.counts).filter(([cid]) => !removedIds.includes(cid))),
+          ...Object.fromEntries(newCourses.map((c, i) => [c.id, tree[i].videos.length])),
+        },
       });
       return { ok: true, courses: tree.length, lessons: totalLessons };
     },
